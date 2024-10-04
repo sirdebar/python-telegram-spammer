@@ -469,9 +469,6 @@ async def process_delay(message: Message, state: FSMContext):
         if delay < 5 or delay > 3600:
             raise ValueError
 
-        # Сохраняем задержку в состоянии
-        await state.update_data(delay=delay)
-
         user_data = await state.get_data()
         account_id = user_data['account_id']
         selected_chats = user_data['selected_chats']
@@ -479,12 +476,12 @@ async def process_delay(message: Message, state: FSMContext):
 
         # Запускаем рассылку
         asyncio.create_task(start_mailing(account_id, selected_chats, messages, delay, message.from_user.id))
-        await message.answer("<b>🚀 Рассылка запущена!</b> Статус: <b>Активна</b>", reply_markup=get_mailing_control_keyboard(paused=False))
+        await message.answer("<b>🚀 Рассылка запущена!</b> Статус: <b>Активна</b>", reply_markup=get_mailing_control_keyboard())
         await state.set_state(MailingStates.waiting_for_action)
 
     except ValueError:
         await message.answer("<b>⚠️ Неверный формат. Введите задержку в диапазоне от 5 до 3600 секунд.</b>")
-
+        
 def get_mailing_control_keyboard(paused=False):
     """Клавиатура управления рассылкой."""
     buttons = []
@@ -582,12 +579,13 @@ async def pause_mailing(callback_query: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "resume_mailing")
 async def resume_mailing(callback_query: CallbackQuery, state: FSMContext):
+    """Обработчик возобновления рассылки."""
     user_data = await state.get_data()
     account_id = user_data['account_id']
     selected_chats = user_data['selected_chats']
     messages = user_data['messages']
-    delay = user_data['delay']  # Теперь это значение будет доступно
-
+    delay = user_data['delay']
+    
     # Возобновляем рассылку
     active_mailings[callback_query.from_user.id] = True
     asyncio.create_task(start_mailing(account_id, selected_chats, messages, delay, callback_query.from_user.id))

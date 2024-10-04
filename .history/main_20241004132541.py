@@ -469,9 +469,6 @@ async def process_delay(message: Message, state: FSMContext):
         if delay < 5 or delay > 3600:
             raise ValueError
 
-        # Сохраняем задержку в состоянии
-        await state.update_data(delay=delay)
-
         user_data = await state.get_data()
         account_id = user_data['account_id']
         selected_chats = user_data['selected_chats']
@@ -479,22 +476,19 @@ async def process_delay(message: Message, state: FSMContext):
 
         # Запускаем рассылку
         asyncio.create_task(start_mailing(account_id, selected_chats, messages, delay, message.from_user.id))
-        await message.answer("<b>🚀 Рассылка запущена!</b> Статус: <b>Активна</b>", reply_markup=get_mailing_control_keyboard(paused=False))
+        await message.answer("<b>🚀 Рассылка запущена!</b> Статус: <b>Активна</b>", reply_markup=get_mailing_control_keyboard())
         await state.set_state(MailingStates.waiting_for_action)
 
     except ValueError:
         await message.answer("<b>⚠️ Неверный формат. Введите задержку в диапазоне от 5 до 3600 секунд.</b>")
-
-def get_mailing_control_keyboard(paused=False):
+        
+def get_mailing_control_keyboard():
     """Клавиатура управления рассылкой."""
-    buttons = []
-    if paused:
-        buttons.append([InlineKeyboardButton(text="▶️ Продолжить", callback_data="resume_mailing")])
-    else:
-        buttons.append([InlineKeyboardButton(text="⏸ Приостановить", callback_data="pause_mailing")])
-    buttons.append([InlineKeyboardButton(text="⏹ Закончить", callback_data="stop_mailing")])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏸ Приостановить", callback_data="pause_mailing")],
+        [InlineKeyboardButton(text="⏹ Закончить", callback_data="stop_mailing")]
+    ])
+    return keyboard
 
 async def send_messages(account_id, chats, messages, delay, user_id):
     # Получаем аккаунт пользователя и запускаем сессию Telethon
@@ -574,31 +568,15 @@ async def start_mailing(account_id, chats, messages, delay, user_id):
 
 @dp.callback_query(F.data == "pause_mailing")
 async def pause_mailing(callback_query: CallbackQuery, state: FSMContext):
-    """Обработчик паузы рассылки."""
     user_id = callback_query.from_user.id
     if active_mailings.get(user_id):
-        active_mailings[user_id] = False  # Останавливаем рассылку (пауза)
-        await callback_query.message.edit_text("<b>Статус рассылки:</b> Приостановлена", reply_markup=get_mailing_control_keyboard(paused=True))
-
-@dp.callback_query(F.data == "resume_mailing")
-async def resume_mailing(callback_query: CallbackQuery, state: FSMContext):
-    user_data = await state.get_data()
-    account_id = user_data['account_id']
-    selected_chats = user_data['selected_chats']
-    messages = user_data['messages']
-    delay = user_data['delay']  # Теперь это значение будет доступно
-
-    # Возобновляем рассылку
-    active_mailings[callback_query.from_user.id] = True
-    asyncio.create_task(start_mailing(account_id, selected_chats, messages, delay, callback_query.from_user.id))
-
-    await callback_query.message.edit_text("<b>Статус рассылки:</b> Активна", reply_markup=get_mailing_control_keyboard(paused=False))
+        active_mailings[user_id] = False
+        await callback_query.message.edit_text("<b>Статус рассылки:</b> Приостановлена", reply_markup=get_mailing_control_keyboard())
 
 @dp.callback_query(F.data == "stop_mailing")
 async def stop_mailing(callback_query: CallbackQuery, state: FSMContext):
-    """Обработчик завершения рассылки."""
     user_id = callback_query.from_user.id
-    active_mailings[user_id] = False  # Полностью останавливаем рассылку
+    active_mailings[user_id] = False
     await callback_query.message.edit_text("<b>Статус рассылки:</b> Завершена")
 
 # ================== ЗАПУСК БОТА ===================

@@ -456,10 +456,23 @@ async def confirm_chats(callback_query: CallbackQuery, state: FSMContext):
 
 # ================== ПРОЦЕСС РАССЫЛКИ ===================
 
-@dp.message(MailingStates.waiting_for_messages)
+@dp.message(MailingStates.waiting_for_messages, content_types=['text', 'photo'])
 async def process_messages(message: Message, state: FSMContext):
-    await state.update_data(messages=message.text)
-    await message.answer("<b>⏳ Введите задержку между сообщениями (в секундах, минимум 5 секунд, максимум 3600 секунд).</b>")
+    """Обрабатываем сообщение для рассылки, поддерживает текст и фото."""
+    
+    if message.photo:
+        # Если сообщение содержит фото
+        photo = message.photo[-1].file_id  # Берём самую высококачественную версию фото
+        caption = message.caption or ""  # Подпись к фото (если есть)
+        
+        # Сохраняем фото и подпись
+        await state.update_data(messages={'type': 'photo', 'photo': photo, 'caption': caption})
+        await message.answer("<b>⏳ Введите задержку между сообщениями (в секундах, минимум 5 секунд, максимум 3600 секунд).</b>")
+    else:
+        # Если сообщение содержит только текст
+        await state.update_data(messages={'type': 'text', 'text': message.text})
+        await message.answer("<b>⏳ Введите задержку между сообщениями (в секундах, минимум 5 секунд, максимум 3600 секунд).</b>")
+    
     await state.set_state(MailingStates.waiting_for_delay)
 
 @dp.message(MailingStates.waiting_for_delay)

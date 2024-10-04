@@ -582,12 +582,13 @@ async def pause_mailing(callback_query: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "resume_mailing")
 async def resume_mailing(callback_query: CallbackQuery, state: FSMContext):
+    """Обработчик возобновления рассылки."""
     user_data = await state.get_data()
     account_id = user_data['account_id']
     selected_chats = user_data['selected_chats']
     messages = user_data['messages']
-    delay = user_data['delay']  # Теперь это значение будет доступно
-
+    delay = user_data['delay']
+    
     # Возобновляем рассылку
     active_mailings[callback_query.from_user.id] = True
     asyncio.create_task(start_mailing(account_id, selected_chats, messages, delay, callback_query.from_user.id))

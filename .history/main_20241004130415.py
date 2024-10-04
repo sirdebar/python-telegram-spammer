@@ -365,25 +365,29 @@ async def new_mailing(message: Message, state: FSMContext):
 async def choose_account(callback_query: CallbackQuery, state: FSMContext):
     account_id = int(callback_query.data.split("_")[-1])
 
-    # Парсим группы каждый раз при создании новой рассылки
-    cursor.execute('SELECT phone_number, session FROM accounts WHERE account_id = ?', (account_id,))
-    account = cursor.fetchone()
-    phone_number, session_string = account
-
-    client = TelegramClient(f'sessions/{phone_number}', TELEGRAM_API_ID, TELEGRAM_API_HASH)
-    await client.connect()
-    if not await client.is_user_authorized():
-        await callback_query.message.answer("<b>Ошибка авторизации.</b>")
-        await state.clear()
-        return
-
-    # Парсим группы при каждом запуске рассылки
-    await get_group_chats(client, account_id)
-    await client.disconnect()
-
-    # Повторно запрашиваем список чатов
+    # Запрашиваем список чатов для выбранного аккаунта
     cursor.execute('SELECT chat_id, title FROM chats WHERE account_id = ?', (account_id,))
     chats = cursor.fetchall()
+
+    if not chats:
+        # Если чаты не найдены, парсим их из аккаунта
+        cursor.execute('SELECT phone_number, session FROM accounts WHERE account_id = ?', (account_id,))
+        account = cursor.fetchone()
+        phone_number, session_string = account
+
+        client = TelegramClient(f'sessions/{phone_number}', TELEGRAM_API_ID, TELEGRAM_API_HASH)
+        await client.connect()
+        if not await client.is_user_authorized():
+            await callback_query.message.answer("<b>Ошибка авторизации.</b>")
+            await state.clear()
+            return
+
+        await get_group_chats(client, account_id)  # Парсим чаты-группы
+        await client.disconnect()
+
+        # Повторно запрашиваем список чатов
+        cursor.execute('SELECT chat_id, title FROM chats WHERE account_id = ?', (account_id,))
+        chats = cursor.fetchall()
 
     # Сохраняем account_id в состояние
     await state.update_data(account_id=account_id)
@@ -435,11 +439,7 @@ async def toggle_chat(callback_query: CallbackQuery, state: FSMContext):
         selected_chats.append(chat_id)
 
     await state.update_data(selected_chats=selected_chats)
-
-    # Обновляем клавиатуру после изменения статуса чатов
-    chats = user_data['all_chats']
-    page = user_data['page']
-    await show_chat_selection(callback_query.message, chats, state, page=page)
+    await callback_query.answer("Чат обновлен!")
 
 @dp.callback_query(F.data.startswith("next_page_") | F.data.startswith("prev_page_"))
 async def paginate_chats(callback_query: CallbackQuery, state: FSMContext):
@@ -469,9 +469,6 @@ async def process_delay(message: Message, state: FSMContext):
         if delay < 5 or delay > 3600:
             raise ValueError
 
-        # Сохраняем задержку в состоянии
-        await state.update_data(delay=delay)
-
         user_data = await state.get_data()
         account_id = user_data['account_id']
         selected_chats = user_data['selected_chats']
@@ -479,22 +476,19 @@ async def process_delay(message: Message, state: FSMContext):
 
         # Запускаем рассылку
         asyncio.create_task(start_mailing(account_id, selected_chats, messages, delay, message.from_user.id))
-        await message.answer("<b>🚀 Рассылка запущена!</b> Статус: <b>Активна</b>", reply_markup=get_mailing_control_keyboard(paused=False))
+        await message.answer("<b>🚀 Рассылка запущена!</b> Статус: <b>Активна</b>", reply_markup=get_mailing_control_keyboard())
         await state.set_state(MailingStates.waiting_for_action)
 
     except ValueError:
         await message.answer("<b>⚠️ Неверный формат. Введите задержку в диапазоне от 5 до 3600 секунд.</b>")
 
-def get_mailing_control_keyboard(paused=False):
+def get_mailing_control_keyboard():
     """Клавиатура управления рассылкой."""
-    buttons = []
-    if paused:
-        buttons.append([InlineKeyboardButton(text="▶️ Продолжить", callback_data="resume_mailing")])
-    else:
-        buttons.append([InlineKeyboardButton(text="⏸ Приостановить", callback_data="pause_mailing")])
-    buttons.append([InlineKeyboardButton(text="⏹ Закончить", callback_data="stop_mailing")])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏸ Приостановить", callback_data="pause_mailing")],
+        [InlineKeyboardButton(text="⏹ Закончить", callback_data="stop_mailing")]
+    ])
+    return keyboard
 
 async def send_messages(account_id, chats, messages, delay, user_id):
     # Получаем аккаунт пользователя и запускаем сессию Telethon
@@ -544,7 +538,7 @@ async def get_group_chats(client, account_id):
 active_mailings = {}
 
 async def start_mailing(account_id, chats, messages, delay, user_id):
-    """Запуск рассылки сообщений с контролем и циклической отправкой."""
+    """Запуск рассылки сообщений с контролем."""
     active_mailings[user_id] = True  # Рассылка активна
     cursor.execute('SELECT phone_number, session FROM accounts WHERE account_id = ?', (account_id,))
     account = cursor.fetchone()
@@ -554,51 +548,30 @@ async def start_mailing(account_id, chats, messages, delay, user_id):
     await client.connect()
 
     sent_count = 0
-
     while active_mailings.get(user_id):
         for chat_id in chats:
             if not active_mailings.get(user_id):
                 break
             try:
-                # Отправляем сообщение в выбранный чат
                 await client.send_message(chat_id, messages)
                 sent_count += 1
-                await asyncio.sleep(delay)  # Задержка перед отправкой следующего сообщения
+                await asyncio.sleep(delay)
             except Exception as e:
                 logging.error(f"Ошибка при отправке в чат {chat_id}: {e}")
-        # После одного полного прохода ждем задержку перед новым циклом
-        if active_mailings.get(user_id):
-            await asyncio.sleep(delay)
-        
+        break  # Выход из цикла после одного полного прохода
     await client.disconnect()
 
 @dp.callback_query(F.data == "pause_mailing")
 async def pause_mailing(callback_query: CallbackQuery, state: FSMContext):
-    """Обработчик паузы рассылки."""
     user_id = callback_query.from_user.id
     if active_mailings.get(user_id):
-        active_mailings[user_id] = False  # Останавливаем рассылку (пауза)
-        await callback_query.message.edit_text("<b>Статус рассылки:</b> Приостановлена", reply_markup=get_mailing_control_keyboard(paused=True))
-
-@dp.callback_query(F.data == "resume_mailing")
-async def resume_mailing(callback_query: CallbackQuery, state: FSMContext):
-    user_data = await state.get_data()
-    account_id = user_data['account_id']
-    selected_chats = user_data['selected_chats']
-    messages = user_data['messages']
-    delay = user_data['delay']  # Теперь это значение будет доступно
-
-    # Возобновляем рассылку
-    active_mailings[callback_query.from_user.id] = True
-    asyncio.create_task(start_mailing(account_id, selected_chats, messages, delay, callback_query.from_user.id))
-
-    await callback_query.message.edit_text("<b>Статус рассылки:</b> Активна", reply_markup=get_mailing_control_keyboard(paused=False))
+        active_mailings[user_id] = False
+        await callback_query.message.edit_text("<b>Статус рассылки:</b> Приостановлена", reply_markup=get_mailing_control_keyboard())
 
 @dp.callback_query(F.data == "stop_mailing")
 async def stop_mailing(callback_query: CallbackQuery, state: FSMContext):
-    """Обработчик завершения рассылки."""
     user_id = callback_query.from_user.id
-    active_mailings[user_id] = False  # Полностью останавливаем рассылку
+    active_mailings[user_id] = False
     await callback_query.message.edit_text("<b>Статус рассылки:</b> Завершена")
 
 # ================== ЗАПУСК БОТА ===================
