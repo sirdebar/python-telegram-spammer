@@ -453,7 +453,7 @@ async def process_key(message: Message, state: FSMContext):
 
 @dp.message(F.text == "🛒 Купить доступ")
 async def buy_access(message: Message):
-    admin_username = "sirdebar"
+    admin_username = "Vlktor_dnr"
     await message.answer(f"<b>Доступ к боту вы можете приобрести у @{admin_username}!</b>")
 
 # ================== УПРАВЛЕНИЕ АККАУНТАМИ ===================
