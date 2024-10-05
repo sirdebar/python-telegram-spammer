@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 import random
 import aiosqlite
 
-API_TOKEN = '8024335015:AAEeQ6cZSHJdvSXhMzyubyth1UHOv2mFtpM'
+API_TOKEN = '7695275246:AAH6YVL0l6WGvRIjDOhDveiu-bFk4oE1gck'
 ADMIN_ID = 1930733528
 TELEGRAM_API_ID = '20996594'
 TELEGRAM_API_HASH = 'aa91bd7c0ffccf2750f3b4dc6f97cc31'
