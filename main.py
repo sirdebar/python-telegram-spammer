@@ -20,10 +20,10 @@ import random
 import aiosqlite
 
 API_TOKEN = '8024335015:AAEeQ6cZSHJdvSXhMzyubyth1UHOv2mFtpM'
-ADMIN_ID = 1083294848
-TELEGRAM_API_ID = '23422308'
-TELEGRAM_API_HASH = '1da8d8d190e8fb59531b28258d1ed64c'
-BUY_LINK = "https://t.me/sirdebar"
+ADMIN_ID = 1930733528
+TELEGRAM_API_ID = '20996594'
+TELEGRAM_API_HASH = 'aa91bd7c0ffccf2750f3b4dc6f97cc31'
+BUY_LINK = "https://t.me/Vlktor_dnr"
 CHANNEL_NAME = '@diablocatos'
 
 if not os.path.exists('temp_photos'):
@@ -146,26 +146,39 @@ def get_user_menu():
             [KeyboardButton(text='📋 Профиль')],
             [KeyboardButton(text='🗝️ Добавить аккаунт')],
             [KeyboardButton(text='📤 Новая рассылка')],
-            [KeyboardButton(text='⚙️ Управление аккаунтами')] 
+            [KeyboardButton(text='⚙️ Управление аккаунтами')] # Кнопка для перехода в админское меню
         ],
         resize_keyboard=True
     )
     return keyboard
 
+# Админская клавиатура
 def get_admin_menu():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text='🔑 Генерация ключа')],
             [KeyboardButton(text='📋 Профиль')],
             [KeyboardButton(text='🗝️ Добавить аккаунт')],
             [KeyboardButton(text='📤 Новая рассылка')],
             [KeyboardButton(text='⚙️ Управление аккаунтами')],
-            [KeyboardButton(text='📢 Создать объявление')],
-            [KeyboardButton(text='🔄 Сменить обязалку')]
+            [KeyboardButton(text='🛠️ Админ панель')]  # Кнопка для возврата к основной клавиатуре
         ],
         resize_keyboard=True
     )
     return keyboard
+
+
+def get_admin_panel_keyboard():
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+        [KeyboardButton(text="🔑 Генерация ключа", callback_data="generate_key")],
+        [KeyboardButton(text="📢 Создать объявление", callback_data="create_announcement")],
+        [KeyboardButton(text="🔄 Сменить обязалку", callback_data="change_mandatory_channel")],
+        [KeyboardButton(text='🚪 Выйти', callback_data="exit_admin_panel")]
+    ],
+    resize_keyboard=True
+    )
+    return keyboard
+
 
 def get_subscription_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -181,6 +194,25 @@ def get_confirmation_keyboard():
         [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_announcement")]
     ])
     return keyboard
+
+# ================== ХЭНДЛЕР АДМИНКИ ===================
+
+@dp.message(F.text == "🛠️ Админ панель")
+async def admin_panel(message: Message):
+    user_id = message.from_user.id
+    if user_id == ADMIN_ID:
+        await message.answer("<b>Выберите действие из админ-панели:</b>", reply_markup=get_admin_panel_keyboard())
+    else:
+        await message.answer("<b>⛔ У вас нет прав на доступ к админ-панели.</b>")
+
+@dp.message(F.text == "🚪 Выйти")
+async def exit_admin_panel(message: Message):
+    user_id = message.from_user.id
+    if user_id == ADMIN_ID:
+        # Возвращаемся на основную клавиатуру
+        await message.answer("<b>Вы вернулись в основное меню.</b>", reply_markup=get_admin_menu())
+    else:
+        await message.answer("<b>⛔ У вас нет прав для выполнения этой команды.</b>")
 
 # ================== РЕКЛАМНАЯ РАССЫЛКА ===================
 
@@ -446,6 +478,12 @@ async def confirm_account_deletion(callback_query: CallbackQuery):
     async with aiosqlite.connect('bot_database.db') as db:
         async with db.execute('SELECT phone_number FROM accounts WHERE account_id = ?', (account_id,)) as cursor:
             phone_number = await cursor.fetchone()
+            
+            # Проверяем, есть ли телефонный номер для данного аккаунта
+            if phone_number is None:
+                await callback_query.message.answer("<b>Аккаунт не найден. Возможно, он уже был удалён.</b>")
+                return
+
             phone_number = phone_number[0]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -458,10 +496,12 @@ async def confirm_account_deletion(callback_query: CallbackQuery):
         reply_markup=keyboard
     )
 
+
 @dp.callback_query(F.data == "cancel_deletion")
 async def cancel_deletion(callback_query: CallbackQuery):
     await callback_query.message.edit_text("<b>Удаление аккаунта отменено.</b>")
     await callback_query.message.answer("<b>Вы вернулись в главное меню.</b>", reply_markup=get_user_menu())
+
 
 @dp.callback_query(F.data.startswith("confirm_delete_"))
 async def delete_account(callback_query: CallbackQuery):
@@ -469,6 +509,12 @@ async def delete_account(callback_query: CallbackQuery):
     async with aiosqlite.connect('bot_database.db') as db:
         async with db.execute('SELECT phone_number FROM accounts WHERE account_id = ?', (account_id,)) as cursor:
             account = await cursor.fetchone()
+            
+            # Проверяем, есть ли аккаунт с указанным account_id
+            if account is None:
+                await callback_query.message.answer("<b>Аккаунт не найден. Возможно, он уже был удалён.</b>")
+                return
+
             phone_number = account[0]
             session_path = f'sessions/{phone_number}.session'
 
@@ -496,15 +542,14 @@ async def delete_account(callback_query: CallbackQuery):
             if attempt < max_retries - 1:
                 await asyncio.sleep(0.5)  # Задержка перед повторной попыткой
             else:
-                await callback_query.message.answer(f"<b>Не удалось удалить сессию для номера {phone_number}. Попробуйте позже.</b>")
-                return
+                logging.error(f"Файл сессии {session_path} всё ещё занят. Попробуйте позже удалить его вручную.")
 
+    # Сообщение об успешном удалении аккаунта, независимо от результата удаления файла
     await callback_query.message.edit_text(
         f"<b>Аккаунт с номером {phone_number} был успешно удалён.</b>",
         reply_markup=None
     )
     await callback_query.message.answer("<b>Вы вернулись в главное меню.</b>", reply_markup=get_user_menu())
-
 
 # ================== ПРОФИЛЬ И ПОДПИСКА ===================
 
@@ -623,7 +668,7 @@ async def check_subscription_expiration():
                     await bot.send_message(
                         user_id,
                         "<b>⏳ Ваша подписка закончилась.</b>\n"
-                        "Продлить доступ вы можете у администратора."
+                        "Продлить доступ вы можете у администратора @Vlktor_dnr."
                     )
                     await bot.send_message(
                         user_id,

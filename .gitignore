@@ -1,2 +1,8 @@
-.venv
-..history
+# Ignoring virtual environment
+venv/
+
+# Ignoring VSCode settings
+.vscode/
+
+# Ignoring history folder (if you use any code history extension)
+.history/
