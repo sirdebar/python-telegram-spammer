@@ -20,7 +20,7 @@ import random
 import aiosqlite
 
 API_TOKEN = '7695275246:AAH6YVL0l6WGvRIjDOhDveiu-bFk4oE1gck'
-ADMIN_ID = 1930733528
+ADMIN_IDS = [1930733528, 7950926692]
 TELEGRAM_API_ID = '20996594'
 TELEGRAM_API_HASH = 'aa91bd7c0ffccf2750f3b4dc6f97cc31'
 BUY_LINK = "https://t.me/Vlktor_dnr"
@@ -76,7 +76,7 @@ def get_exit_keyboard():
 @dp.message(F.text == "🔄 Сменить обязалку")
 async def change_channel_prompt(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    if user_id == ADMIN_ID:
+    if user_id in ADMIN_IDS:
         sent_message = await message.answer("<b>Введите @username нового канала для обязательной подписки:</b>", reply_markup=get_exit_keyboard())
         await state.update_data(sent_message_id=sent_message.message_id)  # Сохраняем ID сообщения для последующего удаления
         await state.set_state(ChannelChangeStates.waiting_for_channel_name)
@@ -200,7 +200,7 @@ def get_confirmation_keyboard():
 @dp.message(F.text == "🛠️ Админ панель")
 async def admin_panel(message: Message):
     user_id = message.from_user.id
-    if user_id == ADMIN_ID:
+    if user_id in ADMIN_IDS:
         await message.answer("<b>Выберите действие из админ-панели:</b>", reply_markup=get_admin_panel_keyboard())
     else:
         await message.answer("<b>⛔ У вас нет прав на доступ к админ-панели.</b>")
@@ -208,7 +208,7 @@ async def admin_panel(message: Message):
 @dp.message(F.text == "🚪 Выйти")
 async def exit_admin_panel(message: Message):
     user_id = message.from_user.id
-    if user_id == ADMIN_ID:
+    if user_id in ADMIN_IDS:
         # Возвращаемся на основную клавиатуру
         await message.answer("<b>Вы вернулись в основное меню.</b>", reply_markup=get_admin_menu())
     else:
@@ -219,7 +219,7 @@ async def exit_admin_panel(message: Message):
 @dp.message(F.text == "📢 Создать объявление")
 async def start_announcement(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    if user_id == ADMIN_ID:
+    if user_id in ADMIN_IDS:
         await message.answer("<b>Вы собираетесь разослать всем объявление. Введите текст или прикрепите фото (можно с подписью):</b>")
         await state.set_state(AnnouncementStates.waiting_for_content)
     else:
@@ -373,9 +373,11 @@ async def show_profile(message: Message):
     user_id = message.from_user.id
 
     async with aiosqlite.connect('bot_database.db') as db:
-        if user_id == ADMIN_ID:
-            async with db.execute('SELECT COUNT(*) FROM users WHERE subscription_expires > ?', 
-                                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),)) as cursor:
+        if user_id in ADMIN_IDS:
+            async with db.execute(
+                'SELECT COUNT(*) FROM users WHERE subscription_expires > ?',
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),)
+            ) as cursor:
                 active_subscribers = await cursor.fetchone()
                 active_subscribers = active_subscribers[0] or 0
 
@@ -383,7 +385,9 @@ async def show_profile(message: Message):
                 total_mailings = await cursor.fetchone()
                 total_mailings = total_mailings[0] or 0
 
-            async with db.execute('SELECT SUM(sent_messages) FROM mailings WHERE user_id = ?', (ADMIN_ID,)) as cursor:
+            # Запрос с несколькими ADMIN_IDS
+            query = f'SELECT SUM(sent_messages) FROM mailings WHERE user_id IN ({",".join(["?"] * len(ADMIN_IDS))})'
+            async with db.execute(query, ADMIN_IDS) as cursor:
                 personal_mailings = await cursor.fetchone()
                 personal_mailings = personal_mailings[0] or 0
 
@@ -412,6 +416,7 @@ async def show_profile(message: Message):
                 f"<b>Оставшийся срок подписки:</b> {subscription_expires}\n\n"
                 f"<b>Количество ваших рассылок:</b> {mailing_count}"
             )
+
 
 # ================== ВВОД КЛЮЧА ДОСТУПА ===================
 
@@ -565,7 +570,7 @@ async def start_bot(message: Message, state: FSMContext):
     sent_message = None  # Инициализация переменной
 
     # Проверка, админ ли пользователь
-    if user_id == ADMIN_ID:
+    if user_id in ADMIN_IDS:
         sent_message = await message.answer("<b>👑 Добро пожаловать, админ!</b>", reply_markup=get_admin_menu())
     else:
         # Проверка подписки пользователя
@@ -780,7 +785,7 @@ async def process_password(message: Message, state: FSMContext):
 
 @dp.message(F.text == "🔑 Генерация ключа")
 async def ask_for_days(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.answer("<b>⛔ У вас нет доступа.</b>")
         return
     await message.answer("<b>📅 Укажите срок действия ключа в днях:</b>")
