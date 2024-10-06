@@ -18,6 +18,8 @@ from telethon.errors.rpcerrorlist import PhoneNumberInvalidError
 from datetime import datetime, timedelta
 import random
 import aiosqlite
+from telethon.sessions import StringSession
+import socks
 
 API_TOKEN = '7695275246:AAH6YVL0l6WGvRIjDOhDveiu-bFk4oE1gck'
 ADMIN_IDS = [1930733528, 7950926692, 1083294848]
@@ -32,6 +34,15 @@ if not os.path.exists('temp_photos'):
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+PROXY = (
+    socks.SOCKS5, 
+    '1.proxicoin.org',  
+    9083,
+    True,               
+    'uname--102jlr52br1e', 
+    't5wdj09ni6'        
+)
 
 session = AiohttpSession()
 bot = Bot(token=API_TOKEN, session=session, default=DefaultBotProperties(parse_mode='HTML'))
@@ -718,11 +729,12 @@ async def process_phone(message: types.Message, state: FSMContext):
     if not os.path.exists('sessions'):
         os.mkdir('sessions')
 
-    client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    # Создаем клиент Telethon с использованием прокси
+    client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH, proxy=PROXY)
 
     # Попробуем подключиться к Telegram
     try:
-        logger.info("Подключаемся к клиенту Telegram...")
+        logger.info("Подключаемся к клиенту Telegram через прокси...")
         await client.connect()
 
         # Проверяем, авторизован ли пользователь
@@ -1175,12 +1187,14 @@ async def start_mailing(account_id, chats, messages, photo, delay, user_id):
             account = await cursor.fetchone()
 
     session_path = f'sessions/{account[0]}.session'
-    client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    
+    # Используем прокси при подключении Telethon
+    client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH, proxy=PROXY)
+    
     await client.connect()
 
     sent_count = 0  # Счётчик отправленных сообщений
 
-    # Отправляем первое сообщение во все чаты без задержки
     for chat_id in chats:
         if not active_mailings.get(user_id):
             break  # Останавливаем рассылку, если она отменена
@@ -1193,11 +1207,9 @@ async def start_mailing(account_id, chats, messages, photo, delay, user_id):
         except Exception as e:
             logging.error(f"Ошибка при отправке в чат {chat_id}: {e}")
 
-    # Основной цикл рассылки с задержкой
     while active_mailings.get(user_id):
         await asyncio.sleep(delay)  # Задержка перед новой итерацией рассылки
-
-        for chat_id in chats:  # Цикл по каждому чату
+        for chat_id in chats:
             if not active_mailings.get(user_id):
                 break  # Останавливаем рассылку, если она отменена
             try:
@@ -1206,13 +1218,10 @@ async def start_mailing(account_id, chats, messages, photo, delay, user_id):
                 else:
                     await client.send_message(chat_id, messages)
                 sent_count += 1
-
             except Exception as e:
                 logging.error(f"Ошибка при отправке в чат {chat_id}: {e}")
 
     await client.disconnect()
-
-
 
 @dp.callback_query(F.data == "pause_mailing")
 async def pause_mailing(callback_query: CallbackQuery, state: FSMContext):

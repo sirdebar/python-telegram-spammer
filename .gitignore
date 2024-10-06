@@ -6,3 +6,5 @@ venv/
 
 # Ignoring history folder (if you use any code history extension)
 .history/
+
+emoji.py
