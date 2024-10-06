@@ -520,6 +520,8 @@ async def process_key(message: Message, state: FSMContext):
             async with aiosqlite.connect('bot_database.db') as db:
                 await db.execute('INSERT OR REPLACE INTO users (user_id, name, subscription_expires) VALUES (?, ?, ?)',
                                 (message.from_user.id, message.from_user.full_name, subscription_expires))
+                # Удаляем ключ после активации
+                await db.execute('DELETE FROM keys WHERE key = ?', (key,))
                 await db.commit()
 
             await message.answer("<b>✅ Ключ активирован!</b> Ваш доступ <b>продлен</b>.", reply_markup=get_user_menu())
@@ -529,6 +531,7 @@ async def process_key(message: Message, state: FSMContext):
         await message.answer("<b>❌ Неверный ключ.</b>")
     
     await state.clear()
+
 
 # ================== ПОКУПКА ДОСТУПА ===================
 
