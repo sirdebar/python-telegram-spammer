@@ -2,6 +2,7 @@ import logging
 import asyncio
 import os
 import time
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram import Bot, Dispatcher, F
 from aiogram import types
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -18,15 +19,23 @@ from telethon.errors.rpcerrorlist import PhoneNumberInvalidError
 from datetime import datetime, timedelta
 import random
 import aiosqlite
-from telethon.sessions import StringSession
 import socks
+import requests
+import psutil
 
-API_TOKEN = '7695275246:AAH6YVL0l6WGvRIjDOhDveiu-bFk4oE1gck'
+API_TOKEN = '8024335015:AAEeQ6cZSHJdvSXhMzyubyth1UHOv2mFtpM'
 ADMIN_IDS = [1930733528, 7950926692, 1083294848]
 TELEGRAM_API_ID = '20996594'
 TELEGRAM_API_HASH = 'aa91bd7c0ffccf2750f3b4dc6f97cc31'
 BUY_LINK = "https://t.me/Vlktor_dnr"
 CHANNEL_NAME = '@diablocatos'
+PROXY = {
+    'proxy_type': socks.SOCKS5,   # Тип прокси
+    'addr': '148.251.5.30',       # IP адрес прокси
+    'port': 824,                  # Порт
+    'username': '6289fe1cafefb5ce6c43__cr.ru',  # Логин
+    'password': '55bc97d8cbceb786' # Пароль
+}
 
 if not os.path.exists('temp_photos'):
     os.makedirs('temp_photos')
@@ -35,18 +44,38 @@ if not os.path.exists('temp_photos'):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PROXY = (
-    socks.SOCKS5, 
-    '1.proxicoin.org',  
-    9083,
-    True,               
-    'uname--102jlr52br1e', 
-    't5wdj09ni6'        
-)
-
 session = AiohttpSession()
 bot = Bot(token=API_TOKEN, session=session, default=DefaultBotProperties(parse_mode='HTML'))
 dp = Dispatcher(storage=MemoryStorage())
+
+def get_current_ip():
+    """Функция для получения текущего IP через прокси"""
+    proxy = {
+        'http': f'socks5://{PROXY["username"]}:{PROXY["password"]}@{PROXY["addr"]}:{PROXY["port"]}',
+        'https': f'socks5://{PROXY["username"]}:{PROXY["password"]}@{PROXY["addr"]}:{PROXY["port"]}',
+    }
+    try:
+        ip = requests.get("http://ipinfo.io/ip", proxies=proxy).text.strip()
+        return ip
+    except Exception as e:
+        logging.error(f"Ошибка при получении IP через прокси: {e}")
+        return "Не удалось получить IP"
+
+def create_telegram_client(session_name):
+    """Функция для создания клиента Telegram с SOCKS5 прокси"""
+    client = TelegramClient(
+        session_name, 
+        TELEGRAM_API_ID, 
+        TELEGRAM_API_HASH, 
+        proxy=(PROXY['proxy_type'], PROXY['addr'], PROXY['port'], True, PROXY['username'], PROXY['password'])
+    )
+    return client
+
+async def connect_with_proxy(session_path):
+    """Подключение клиента через прокси для каждой сессии"""
+    client = create_telegram_client(session_path)
+    await client.connect()
+    return client
 
 # ================== СОСТОЯНИЯ ===================
 
@@ -158,7 +187,8 @@ def get_user_menu():
             [KeyboardButton(text='📋 Профиль')],
             [KeyboardButton(text='🗝️ Добавить аккаунт')],
             [KeyboardButton(text='📤 Новая рассылка')],
-            [KeyboardButton(text='⚙️ Управление аккаунтами')] # Кнопка для перехода в админское меню
+            [KeyboardButton(text='⚙️ Управление аккаунтами')],
+            [KeyboardButton(text="📊 Активные рассылки")] # Кнопка для перехода в админское меню
         ],
         resize_keyboard=True
     )
@@ -172,7 +202,8 @@ def get_admin_menu():
             [KeyboardButton(text='🗝️ Добавить аккаунт')],
             [KeyboardButton(text='📤 Новая рассылка')],
             [KeyboardButton(text='⚙️ Управление аккаунтами')],
-            [KeyboardButton(text='🛠️ Админ панель')]  # Кнопка для возврата к основной клавиатуре
+            [KeyboardButton(text='🛠️ Админ панель')] ,
+             [KeyboardButton(text="📊 Активные рассылки")] # Кнопка для возврата к основной клавиатуре
         ],
         resize_keyboard=True
     )
@@ -206,6 +237,48 @@ def get_confirmation_keyboard():
         [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_announcement")]
     ])
     return keyboard
+
+@dp.message(F.text == "📊 Активные рассылки")
+async def show_active_mailings(message: Message):
+    user_id = message.from_user.id
+    async with aiosqlite.connect('bot_database.db') as db:
+        async with db.execute('SELECT mailing_id, chats, status, start_time FROM mailings WHERE user_id = ? AND status = ?', (user_id, 'active')) as cursor:
+            active_mailings = await cursor.fetchall()
+
+    if not active_mailings:
+        await message.answer("<b>❌ У вас нет активных рассылок.</b>")
+        return
+
+    # Генерация кнопок для каждой активной рассылки
+    buttons = []
+    for mailing in active_mailings:
+        mailing_id = mailing[0]
+        chats = mailing[1]
+        buttons.append([InlineKeyboardButton(text=f"Рассылка #{mailing_id} ({chats})", callback_data=f"manage_mailing_{mailing_id}")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("<b>Ваши активные рассылки:</b>", reply_markup=keyboard)
+
+@dp.callback_query(F.data.startswith("manage_mailing_"))
+async def manage_mailing(callback_query: CallbackQuery):
+    mailing_id = int(callback_query.data.split("_")[-1])
+
+    # Получаем данные о рассылке
+    async with aiosqlite.connect('bot_database.db') as db:
+        async with db.execute('SELECT status FROM mailings WHERE mailing_id = ?', (mailing_id,)) as cursor:
+            mailing = await cursor.fetchone()
+
+    if not mailing:
+        await callback_query.message.answer("<b>❌ Рассылка не найдена.</b>")
+        return
+
+    status = mailing[0]
+
+    # Отображаем статус рассылки и кнопки управления
+    if status == 'active':
+        await callback_query.message.answer(f"<b>🚀 Рассылка #{mailing_id} запущена! Статус: Активна.</b>", reply_markup=get_mailing_control_keyboard(paused=False))
+    elif status == 'paused':
+        await callback_query.message.answer(f"<b>⏸️ Рассылка #{mailing_id} приостановлена.</b>", reply_markup=get_mailing_control_keyboard(paused=True))
 
 # ================== ХЭНДЛЕР АДМИНКИ ===================
 
@@ -340,7 +413,8 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY, 
                 name TEXT, 
                 subscription_expires DATETIME,
-                is_subscribed BOOLEAN DEFAULT 0
+                is_subscribed BOOLEAN DEFAULT 0,
+                personal_mailings INTEGER DEFAULT 0
             )
         ''')
         await db.execute('''
@@ -363,9 +437,9 @@ async def init_db():
                 mailing_id INTEGER PRIMARY KEY AUTOINCREMENT, 
                 user_id INTEGER, 
                 chats TEXT, 
-                messages TEXT, 
-                status TEXT, 
-                sent_messages INTEGER, 
+                messages TEXT,  
+                sent_messages INTEGER,
+                status TEXT DEFAULT 'active',
                 start_time DATETIME
             )
         ''')
@@ -397,7 +471,6 @@ async def show_profile(message: Message):
                 total_mailings = await cursor.fetchone()
                 total_mailings = total_mailings[0] or 0
 
-            # Запрос с несколькими ADMIN_IDS
             query = f'SELECT SUM(sent_messages) FROM mailings WHERE user_id IN ({",".join(["?"] * len(ADMIN_IDS))})'
             async with db.execute(query, ADMIN_IDS) as cursor:
                 personal_mailings = await cursor.fetchone()
@@ -410,23 +483,19 @@ async def show_profile(message: Message):
                 f"<b>Количество ваших рассылок:</b> {personal_mailings}"
             )
         else:
-            async with db.execute('SELECT name, subscription_expires FROM users WHERE user_id = ?', (user_id,)) as cursor:
+            async with db.execute('SELECT name, subscription_expires, personal_mailings FROM users WHERE user_id = ?', (user_id,)) as cursor:
                 result = await cursor.fetchone()
 
             if not result:
                 await message.answer("<b>⛔ У вас нет активной подписки.</b>")
                 return
 
-            name, subscription_expires = result
-            async with db.execute('SELECT SUM(sent_messages) FROM mailings WHERE user_id = ?', (user_id,)) as cursor:
-                mailing_count = await cursor.fetchone()
-                mailing_count = mailing_count[0] or 0
-
+            name, subscription_expires, personal_mailings = result
             await message.answer(
                 f"<b>👤 Ваш профиль:</b>\n"
                 f"<b>Имя:</b> {name}\n\n"
                 f"<b>Оставшийся срок подписки:</b> {subscription_expires}\n\n"
-                f"<b>Количество ваших рассылок:</b> {mailing_count}"
+                f"<b>Количество ваших рассылок:</b> {personal_mailings}"
             )
 
 
@@ -519,54 +588,6 @@ async def cancel_deletion(callback_query: CallbackQuery):
     await callback_query.message.edit_text("<b>Удаление аккаунта отменено.</b>")
     await callback_query.message.answer("<b>Вы вернулись в главное меню.</b>", reply_markup=get_user_menu())
 
-
-@dp.callback_query(F.data.startswith("confirm_delete_"))
-async def delete_account(callback_query: CallbackQuery):
-    account_id = int(callback_query.data.split("_")[-1])
-    async with aiosqlite.connect('bot_database.db') as db:
-        async with db.execute('SELECT phone_number FROM accounts WHERE account_id = ?', (account_id,)) as cursor:
-            account = await cursor.fetchone()
-            
-            # Проверяем, есть ли аккаунт с указанным account_id
-            if account is None:
-                await callback_query.message.answer("<b>Аккаунт не найден. Возможно, он уже был удалён.</b>")
-                return
-
-            phone_number = account[0]
-            session_path = f'sessions/{phone_number}.session'
-
-        # Создаем клиент Telethon для работы с сессией
-        client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH)
-        await client.connect()
-
-        # Отключаем клиента и завершаем сессию
-        if client.is_connected():
-            await client.disconnect()
-
-        # Удаляем запись из базы данных
-        await db.execute('DELETE FROM accounts WHERE account_id = ?', (account_id,))
-        await db.commit()
-
-    # Попытка удаления файла сессии с проверкой и задержкой
-    max_retries = 3  # Количество попыток
-    for attempt in range(max_retries):
-        try:
-            if os.path.exists(session_path):
-                os.remove(session_path)
-            break  # Успешное удаление, выходим из цикла
-        except PermissionError as e:
-            logging.error(f"Ошибка при удалении файла сессии: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(0.5)  # Задержка перед повторной попыткой
-            else:
-                logging.error(f"Файл сессии {session_path} всё ещё занят. Попробуйте позже удалить его вручную.")
-
-    # Сообщение об успешном удалении аккаунта, независимо от результата удаления файла
-    await callback_query.message.edit_text(
-        f"<b>Аккаунт с номером {phone_number} был успешно удалён.</b>",
-        reply_markup=None
-    )
-    await callback_query.message.answer("<b>Вы вернулись в главное меню.</b>", reply_markup=get_user_menu())
 
 # ================== ПРОФИЛЬ И ПОДПИСКА ===================
 
@@ -709,41 +730,67 @@ def get_code_input_keyboard():
     return keyboard
 
 # Хендлер для добавления аккаунта
+# ================== ДОБАВЛЕНИЕ АККАУНТА ===================
+
+# ================== ДОБАВЛЕНИЕ АККАУНТА ===================
+
 @dp.message(F.text == "🗝️ Добавить аккаунт")
 async def add_account(message: types.Message, state: FSMContext):
+    """Добавление аккаунта с использованием существующей сессии, если она есть."""
     await message.answer("<b>📞 Введите номер телефона (в формате 9123456789).</b>")
     await state.set_state(AccountStates.waiting_for_phone)
 
-# Хендлер для обработки номера телефона
 @dp.message(AccountStates.waiting_for_phone)
 async def process_phone(message: types.Message, state: FSMContext):
     phone_number = message.text.strip()
-    
+
     # Проверяем формат номера
     if not phone_number.isdigit() or len(phone_number) < 10:
         await message.answer("<b>❌ Неверный формат номера телефона. Пожалуйста, введите корректный номер.</b>")
         await state.clear()
         return
-    
+
     session_path = f'sessions/{phone_number}.session'
-    if not os.path.exists('sessions'):
-        os.mkdir('sessions')
 
-    # Создаем клиент Telethon с использованием прокси
-    client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH, proxy=PROXY)
+    # Проверяем, существует ли сессия на диске
+    if os.path.exists(session_path):
+        try:
+            client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
-    # Попробуем подключиться к Telegram
+            await client.connect()
+
+            if await client.is_user_authorized():
+                # Если сессия активна, добавляем аккаунт в базу данных снова
+                session_string = client.session.save()
+                async with aiosqlite.connect('bot_database.db') as db:
+                    await db.execute('INSERT OR REPLACE INTO accounts (user_id, phone_number, session) VALUES (?, ?, ?)', 
+                                     (message.from_user.id, phone_number, session_string))
+                    await db.commit()
+
+                await message.answer(f"<b>✅ Вы уже входили в аккаунт ранее, вход успешен!</b>", reply_markup=get_user_menu())
+                await state.clear()
+                await client.disconnect()
+                return
+            else:
+                await message.answer(f"<b>❗ Сессия для номера {phone_number} не активна. Требуется повторная авторизация.</b>")
+
+        except Exception as e:
+            logging.error(f"Ошибка при подключении к клиенту с существующей сессией: {e}")
+            await message.answer(f"<b>❌ Ошибка с существующей сессией: {e}</b>")
+            await state.clear()
+            return
+
+    # Если сессии нет, создаем нового клиента
+    client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH, 
+                            proxy=(socks.SOCKS5, PROXY['addr'], PROXY['port'], True, PROXY['username'], PROXY['password']))
+
     try:
-        logger.info("Подключаемся к клиенту Telegram через прокси...")
+        logging.info(f"Подключаемся к клиенту Telegram через прокси с номером {phone_number}...")
         await client.connect()
 
-        # Проверяем, авторизован ли пользователь
         if not await client.is_user_authorized():
-            logger.info(f"Запрашиваем код для номера: {phone_number}")
             await client.send_code_request(phone_number)
-            await message.answer(f"<b>📲 Код отправлен на номер {phone_number}.</b> Введите его с помощью кнопок ниже.")
-
-            # Отправляем инлайн-клавиатуру для ввода кода
+            await message.answer(f"<b>📲 Код отправлен на номер {phone_number}. Введите его с помощью кнопок ниже.</b>")
             await state.update_data(phone_number=phone_number, client=client, code='')
             await message.answer("Ваш ввод: ", reply_markup=get_code_input_keyboard())
             await state.set_state(AccountStates.waiting_for_code)
@@ -754,13 +801,36 @@ async def process_phone(message: types.Message, state: FSMContext):
     except PhoneNumberInvalidError:
         await message.answer(f"<b>❌ Неверный номер телефона: {phone_number}. Пожалуйста, введите корректный номер.</b>")
         await state.clear()
-        return
-    
+
     except Exception as e:
-        logger.error(f"Ошибка при попытке подключения: {e}")
+        logging.error(f"Ошибка при подключении: {e}")
         await message.answer(f"<b>❌ Ошибка при обработке номера телефона: {e}</b>")
         await state.clear()
-        return
+
+
+# ================== УДАЛЕНИЕ АККАУНТА ===================
+
+@dp.callback_query(F.data.startswith("confirm_delete_"))
+async def delete_account(callback_query: CallbackQuery):
+    account_id = int(callback_query.data.split("_")[-1])
+
+    async with aiosqlite.connect('bot_database.db') as db:
+        async with db.execute('SELECT phone_number FROM accounts WHERE account_id = ?', (account_id,)) as cursor:
+            account = await cursor.fetchone()
+            if account is None:
+                await callback_query.message.answer("<b>Аккаунт не найден. Возможно, он уже был удалён.</b>")
+                return
+
+            phone_number = account[0]
+            session_path = f'sessions/{phone_number}.session'
+
+        # Удаляем аккаунт из базы данных, но оставляем сессию на диске
+        await db.execute('DELETE FROM accounts WHERE account_id = ?', (account_id,))
+        await db.commit()
+
+    await callback_query.message.edit_text(f"<b>Аккаунт с номером {phone_number} был успешно удалён из интерфейса.</b>")
+    await callback_query.message.answer("<b>Вы вернулись в главное меню.</b>", reply_markup=get_user_menu())
+
 
 # Хендлер для обработки нажатий на кнопки с цифрами кода
 @dp.callback_query(AccountStates.waiting_for_code, lambda c: c.data.startswith('code_'))
@@ -1180,56 +1250,87 @@ active_mailings = {}
 # ================== ИСПРАВЛЕННАЯ ФУНКЦИЯ РАССЫЛКИ ===================
 
 async def start_mailing(account_id, chats, messages, photo, delay, user_id):
-    active_mailings[user_id] = True  # Флаг активности рассылки
+    # Помечаем рассылку как активную в БД
+    async with aiosqlite.connect('bot_database.db') as db:
+        await db.execute('''
+            INSERT INTO mailings (user_id, chats, messages, status, sent_messages, start_time) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, ','.join(map(str, chats)), messages, 'active', 0, datetime.now().isoformat()))
+        await db.commit()
 
+    # Получаем данные аккаунта для сессии
     async with aiosqlite.connect('bot_database.db') as db:
         async with db.execute('SELECT phone_number, session FROM accounts WHERE account_id = ?', (account_id,)) as cursor:
             account = await cursor.fetchone()
 
     session_path = f'sessions/{account[0]}.session'
-    
-    # Используем прокси при подключении Telethon
-    client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH, proxy=PROXY)
-    
-    await client.connect()
-
     sent_count = 0  # Счётчик отправленных сообщений
 
+    # Первая отправка без задержки
     for chat_id in chats:
-        if not active_mailings.get(user_id):
-            break  # Останавливаем рассылку, если она отменена
+        # Проверяем статус рассылки
+        if not await is_mailing_active(user_id):
+            break
         try:
+            client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH, 
+                                    proxy=(socks.SOCKS5, PROXY['addr'], PROXY['port'], True, PROXY['username'], PROXY['password']))
+            await client.connect()
+
+            current_ip = get_current_ip()
+            logging.info(f"Отправляем сообщение в чат {chat_id} с IP: {current_ip}")
+
             if photo:
                 await client.send_file(chat_id, photo, caption=messages if messages else "")
             else:
                 await client.send_message(chat_id, messages)
             sent_count += 1
+            await client.disconnect()
+
         except Exception as e:
             logging.error(f"Ошибка при отправке в чат {chat_id}: {e}")
 
-    while active_mailings.get(user_id):
-        await asyncio.sleep(delay)  # Задержка перед новой итерацией рассылки
+    # Основной цикл рассылки с задержкой
+    while await is_mailing_active(user_id):
+        await asyncio.sleep(delay)
         for chat_id in chats:
-            if not active_mailings.get(user_id):
-                break  # Останавливаем рассылку, если она отменена
+            if not await is_mailing_active(user_id):
+                break
             try:
+                client = TelegramClient(session_path, TELEGRAM_API_ID, TELEGRAM_API_HASH, 
+                                        proxy=(socks.SOCKS5, PROXY['addr'], PROXY['port'], True, PROXY['username'], PROXY['password']))
+                await client.connect()
+
+                current_ip = get_current_ip()
+                logging.info(f"Отправляем сообщение в чат {chat_id} с IP: {current_ip}")
+
                 if photo:
                     await client.send_file(chat_id, photo, caption=messages if messages else "")
                 else:
                     await client.send_message(chat_id, messages)
                 sent_count += 1
+                await client.disconnect()
+
             except Exception as e:
                 logging.error(f"Ошибка при отправке в чат {chat_id}: {e}")
 
-    await client.disconnect()
+# Проверка статуса рассылки в БД
+async def is_mailing_active(user_id):
+    async with aiosqlite.connect('bot_database.db') as db:
+        async with db.execute('SELECT status FROM mailings WHERE user_id = ? ORDER BY start_time DESC LIMIT 1', (user_id,)) as cursor:
+            result = await cursor.fetchone()
+            return result and result[0] == 'active'
 
+# Приостановка рассылки
 @dp.callback_query(F.data == "pause_mailing")
 async def pause_mailing(callback_query: CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
-    if active_mailings.get(user_id):
-        active_mailings[user_id] = False
-        await callback_query.message.edit_text("<b>Статус рассылки:</b> Приостановлена", reply_markup=get_mailing_control_keyboard(paused=True))
+    async with aiosqlite.connect('bot_database.db') as db:
+        await db.execute('UPDATE mailings SET status = ? WHERE user_id = ? AND status = ?', ('paused', user_id, 'active'))
+        await db.commit()
 
+    await callback_query.message.edit_text("<b>Статус рассылки:</b> Приостановлена", reply_markup=get_mailing_control_keyboard(paused=True))
+
+# Возобновление рассылки
 @dp.callback_query(F.data == "resume_mailing")
 async def resume_mailing(callback_query: CallbackQuery, state: FSMContext):
     user_data = await state.get_data()
@@ -1248,7 +1349,10 @@ async def resume_mailing(callback_query: CallbackQuery, state: FSMContext):
         await callback_query.message.edit_text("<b>Ошибка:</b> Недостаточно данных для возобновления рассылки.")
         return
 
-    active_mailings[callback_query.from_user.id] = True
+    async with aiosqlite.connect('bot_database.db') as db:
+        await db.execute('UPDATE mailings SET status = ? WHERE user_id = ? AND status = ?', ('active', callback_query.from_user.id, 'paused'))
+        await db.commit()
+
     asyncio.create_task(start_mailing(account_id, selected_chats, messages, photo, delay, callback_query.from_user.id))
 
     await callback_query.message.edit_text("<b>Статус рассылки:</b> Активна", reply_markup=get_mailing_control_keyboard(paused=False))
@@ -1258,38 +1362,36 @@ async def stop_mailing(callback_query: CallbackQuery, state: FSMContext):
     """Обработчик завершения рассылки."""
     user_id = callback_query.from_user.id
 
-    # Если рассылка активна или приостановлена, завершить её
-    if active_mailings.get(user_id) is not None:
-        # Останавливаем рассылку
-        active_mailings[user_id] = False
+    # Проверяем, активна ли рассылка, и завершить её
+    async with aiosqlite.connect('bot_database.db') as db:
+        # Обновляем статус рассылки в БД на 'stopped'
+        await db.execute('UPDATE mailings SET status = ? WHERE user_id = ? AND status IN (?, ?)', 
+                         ('stopped', user_id, 'active', 'paused'))
+        await db.commit()
 
-        # Получаем данные о рассылке
-        user_data = await state.get_data()
-        photo = user_data.get('photo')  # Путь к фотографии, если была отправлена
-        selected_chats = user_data.get('selected_chats', [])
+        # Увеличиваем счетчик рассылок для пользователя
+        await db.execute('UPDATE mailings SET sent_messages = sent_messages + 1 WHERE user_id = ?', (user_id,))
+        
+        # Обновляем общий счетчик рассылок для администраторов
+        await db.execute('UPDATE mailings SET sent_messages = sent_messages + 1 WHERE user_id IN ({})'.format(','.join(map(str, ADMIN_IDS))))
+        await db.commit()
 
-        # Удаление фотографии, если она есть и ещё не удалена
-        if photo and os.path.exists(photo):
-            try:
-                os.remove(photo)  # Удаляем фотографию после завершения рассылки
-                logging.info(f"Фото {photo} успешно удалено после завершения рассылки.")
-            except Exception as e:
-                logging.error(f"Ошибка при удалении файла фото: {e}")
+    # Получаем данные рассылки из состояния
+    user_data = await state.get_data()
+    photo = user_data.get('photo')
+    selected_chats = user_data.get('selected_chats', [])
 
-        # Подсчёт сообщений (отправленных)
-        sent_messages_count = len(selected_chats)
+    # Удаляем файл фото, если он есть
+    if photo and os.path.exists(photo):
+        try:
+            os.remove(photo)
+            logging.info(f"Фото {photo} успешно удалено после завершения рассылки.")
+        except Exception as e:
+            logging.error(f"Ошибка при удалении файла фото: {e}")
 
-        # Добавляем завершённую рассылку в базу данных
-        async with aiosqlite.connect('bot_database.db') as db:
-            await db.execute('INSERT INTO mailings (user_id, chats, sent_messages, status, start_time) VALUES (?, ?, ?, ?, ?)',
-                             (user_id, ','.join(str(c) for c in selected_chats), sent_messages_count, 'finished', datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            await db.commit()
+    # Обновляем интерфейс для пользователя
+    await callback_query.message.edit_text(f"<b>Статус рассылки:</b> Завершена")
 
-        # Сообщаем пользователю об успешном завершении рассылки
-        await callback_query.message.edit_text("<b>Статус рассылки:</b> Завершена")
-    else:
-        # Если рассылка уже завершена ранее, просто уведомляем пользователя
-        await callback_query.message.edit_text("<b>Ошибка:</b> Эта рассылка уже была завершена ранее.")
 
 # ================== ЗАПУСК БОТА ===================
 
