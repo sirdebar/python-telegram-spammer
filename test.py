@@ -23,7 +23,7 @@ import socks
 import requests
 import psutil
 
-API_TOKEN = ''
+API_TOKEN = '8024335015:AAEeQ6cZSHJdvSXhMzyubyth1UHOv2mFtpM'
 ADMIN_IDS = [1930733528, 7950926692, 1083294848]
 TELEGRAM_API_ID = '20996594'
 TELEGRAM_API_HASH = 'aa91bd7c0ffccf2750f3b4dc6f97cc31'
@@ -520,8 +520,6 @@ async def process_key(message: Message, state: FSMContext):
             async with aiosqlite.connect('bot_database.db') as db:
                 await db.execute('INSERT OR REPLACE INTO users (user_id, name, subscription_expires) VALUES (?, ?, ?)',
                                 (message.from_user.id, message.from_user.full_name, subscription_expires))
-                # Удаляем ключ после активации
-                await db.execute('DELETE FROM keys WHERE key = ?', (key,))
                 await db.commit()
 
             await message.answer("<b>✅ Ключ активирован!</b> Ваш доступ <b>продлен</b>.", reply_markup=get_user_menu())
@@ -531,7 +529,6 @@ async def process_key(message: Message, state: FSMContext):
         await message.answer("<b>❌ Неверный ключ.</b>")
     
     await state.clear()
-
 
 # ================== ПОКУПКА ДОСТУПА ===================
 
@@ -942,9 +939,22 @@ def generate_random_key():
 
 # ================== РАССЫЛКА СООБЩЕНИЙ ===================
 
+# Добавляем функцию для проверки активной рассылки
+async def has_active_mailing(user_id):
+    async with aiosqlite.connect('bot_database.db') as db:
+        async with db.execute('SELECT COUNT(*) FROM mailings WHERE user_id = ? AND status = ?', (user_id, 'active')) as cursor:
+            result = await cursor.fetchone()
+            return result[0] > 0
+
+# Модифицируем функцию создания новой рассылки
 @dp.message(F.text == "📤 Новая рассылка")
 async def new_mailing(message: Message, state: FSMContext):
-    # Удаляем предыдущее сообщение, если оно есть
+    # Проверяем, есть ли активная рассылка у пользователя
+    if await has_active_mailing(message.from_user.id):
+        await message.answer("<b>❌ У вас уже есть активная рассылка. Завершите её, чтобы создать новую.</b>")
+        return
+
+    # Остальной код остаётся прежним...
     previous_message_id = await state.get_data()
     if "message_id" in previous_message_id:
         try:
@@ -952,7 +962,6 @@ async def new_mailing(message: Message, state: FSMContext):
         except Exception as e:
             logging.error(f"Ошибка при удалении сообщения: {e}")
 
-    # Отправляем новое сообщение
     async with aiosqlite.connect('bot_database.db') as db:
         async with db.execute('SELECT account_id, phone_number FROM accounts WHERE user_id = ?', (message.from_user.id,)) as cursor:
             accounts = await cursor.fetchall()
