@@ -23,18 +23,18 @@ import socks
 import requests
 import psutil
 
-API_TOKEN = '7695275246:AAH6YVL0l6WGvRIjDOhDveiu-bFk4oE1gck'
-ADMIN_IDS = [1930733528, 7950926692, 1083294848]
-TELEGRAM_API_ID = '20996594'
-TELEGRAM_API_HASH = 'aa91bd7c0ffccf2750f3b4dc6f97cc31'
-BUY_LINK = "https://t.me/Vlktor_dnr"
-CHANNEL_NAME = '@diablocatos'
+API_TOKEN = ''
+ADMIN_IDS = []
+TELEGRAM_API_ID = '2'
+TELEGRAM_API_HASH = ''
+BUY_LINK = ""
+CHANNEL_NAME = ''
 PROXY = {
     'proxy_type': socks.SOCKS5,   # Тип прокси
-    'addr': '148.251.5.30',       # IP адрес прокси
+    'addr': '',       # IP адрес прокси
     'port': 824,                  # Порт
-    'username': '6289fe1cafefb5ce6c43__cr.ru',  # Логин
-    'password': '55bc97d8cbceb786' # Пароль
+    'username': '',  # Логин
+    'password': '' # Пароль
 }
 
 if not os.path.exists('temp_photos'):
@@ -534,7 +534,7 @@ async def process_key(message: Message, state: FSMContext):
 
 @dp.message(F.text == "🛒 Купить доступ")
 async def buy_access(message: Message):
-    admin_username = "Vlktor_dnr"
+    admin_username = "Admin"
     await message.answer(f"<b>Доступ к боту вы можете приобрести у @{admin_username}!</b>")
 
 # ================== УПРАВЛЕНИЕ АККАУНТАМИ ===================
@@ -718,8 +718,6 @@ async def check_subscription_expiration():
 
         await asyncio.sleep(3600)
 
-# ================== ДОБАВЛЕНИЕ АККАУНТА ===================
-
 def get_code_input_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1", callback_data="code_1"), InlineKeyboardButton(text="2", callback_data="code_2"), InlineKeyboardButton(text="3", callback_data="code_3")],
@@ -728,9 +726,6 @@ def get_code_input_keyboard():
         [InlineKeyboardButton(text="0", callback_data="code_0")]
     ])
     return keyboard
-
-# Хендлер для добавления аккаунта
-# ================== ДОБАВЛЕНИЕ АККАУНТА ===================
 
 # ================== ДОБАВЛЕНИЕ АККАУНТА ===================
 
